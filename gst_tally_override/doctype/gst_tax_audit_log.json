@@ -1,0 +1,143 @@
+{
+ "creation": "2025-12-04 11:32:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "description": "Records original vs overridden GST amounts for audit trail",
+ "fields": [
+  {
+   "label": "Parent",
+   "fieldname": "parent",
+   "fieldtype": "Link",
+   "options": "Sales Invoice",
+   "in_list_view": 1,
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "label": "Parenttype",
+   "fieldname": "parenttype",
+   "fieldtype": "Link",
+   "options": "DocType",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "label": "Parentfield",
+   "fieldname": "parentfield",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "label": "Item Code",
+   "fieldname": "item_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "label": "HSN Code",
+   "fieldname": "hsn_code",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "label": "Item Net Amount",
+   "fieldname": "item_net_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Original CGST",
+   "fieldname": "original_cgst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Overridden CGST",
+   "fieldname": "overridden_cgst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Original SGST",
+   "fieldname": "original_sgst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Overridden SGST",
+   "fieldname": "overridden_sgst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Original IGST",
+   "fieldname": "original_igst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Overridden IGST",
+   "fieldname": "overridden_igst",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Original Cess",
+   "fieldname": "original_cess",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Overridden Cess",
+   "fieldname": "overridden_cess",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Rounding Difference",
+   "fieldname": "rounding_difference",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "precision": "2"
+  },
+  {
+   "label": "Item Index",
+   "fieldname": "item_idx",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "modified": "2025-12-04 11:32:00.000000",
+ "modified_by": "Administrator",
+ "module": "GST Tally Override",
+ "name": "GST Tax Audit Log",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

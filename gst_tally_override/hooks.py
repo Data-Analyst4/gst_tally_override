@@ -137,6 +137,39 @@ app_license = "mit"
 # ---------------
 # Hook on document methods and events
 
+# Hook on doc events
+# doc_events = {
+# 	"Sales Invoice": {
+# 		"validate": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+# 		"before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
+# 	}
+# }
+# doc_events = {
+#     "Sales Invoice": {
+#         "before_save": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+#         "before_validate": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+#         "before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
+#     }
+# }
+
+# doc_events = {
+#     "Sales Invoice": {
+#         "before_insert": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+#         "validate": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+#         "before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
+#     }
+# }
+
+
+doc_events = {
+    "Sales Invoice": {
+        "before_insert": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+        "before_save": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+        "validate": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
+        "before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
+    }
+}
+
 # doc_events = {
 # 	"*": {
 # 		"on_update": "method",
