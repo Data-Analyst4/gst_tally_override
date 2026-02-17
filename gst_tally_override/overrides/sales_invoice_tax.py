@@ -271,7 +271,9 @@ def on_before_submit(doc, method):
     if doc.doctype != "Sales Invoice":
         return
 
-    if doc.item_wise_tax_detail:
+    # if doc.item_wise_tax_detail:
+	if any(row.item_wise_tax_detail for row in doc.get("taxes") if row.item_wise_tax_detail):
+
         try:
             json.loads(doc.item_wise_tax_detail)
         except json.JSONDecodeError:
@@ -538,3 +540,4 @@ def rebuild_item_wise_tax_detail_from_item_fields(doc):
 
     doc.item_wise_tax_detail = json.dumps(item_wise_tax)
     frappe.logger().debug(f"[GST Override] item_wise_tax_detail: {doc.item_wise_tax_detail}")
+
