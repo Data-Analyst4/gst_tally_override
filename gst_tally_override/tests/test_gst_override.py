@@ -1,127 +1,159 @@
+import json
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from gst_tally_override.overrides.sales_invoice_tax import (
+	apply_sales_invoice_gst_override,
+	calculate_item_gst_amounts,
+	round_half,
+	sync_tax_row_item_wise_details,
+)
+
+GST_PATCHES = {
+	"get_item_tax_template_name": patch(
+		"gst_tally_override.overrides.sales_invoice_tax.get_item_tax_template_name",
+		return_value="GST-18%-TEST",
+	),
+	"get_gst_rate_from_template": patch(
+		"gst_tally_override.overrides.sales_invoice_tax.get_gst_rate_from_template",
+		return_value=18.0,
+	),
+}
+
+
 class TestGSTOverride(FrappeTestCase):
-    def setUp(self):
-        self.company = self.ensure_company()
-        self.customer_inter = self.ensure_customer("GST Test Customer Inter", "27AAACT0000A1Z5")
-        self.customer_intra = self.ensure_customer("GST Test Customer Intra", "07AAACT0000A1Z5")
-        self.item_18 = self.ensure_item_with_template("GST-ITEM-18", "GST-18%-TEST", 18.0)
+	def setUp(self):
+		self.company = "K95 Foods Private Limited"
+		self.item_code = "GST-ITEM-18"
 
-    def ensure_company(self):
-        if frappe.db.exists("Company", "K95 Foods Private Limited"):
-            return "K95 Foods Private Limited"
-        doc = frappe.get_doc({
-            "doctype": "Company",
-            "company_name": "K95 Foods Private Limited",
-            "abbr": "K95",
-            "default_currency": "INR",
-            "country": "India",
-            "gstin": "07AAACK9500A1Z5",
-        })
-        doc.insert()
-        return doc.name
+	def _intra_invoice(self, is_return=False, qty=1, rate=1000, customer_gstin="06AAICK4821A1ZZ"):
+		inv = frappe.get_doc(
+			{
+				"doctype": "Sales Invoice",
+				"company": self.company,
+				"customer": "_Test Customer",
+				"is_return": is_return,
+				"posting_date": "2025-12-04",
+				"billing_address_gstin": customer_gstin,
+				"net_total": qty * rate,
+				"base_net_total": qty * rate,
+				"total": qty * rate,
+				"base_total": qty * rate,
+			}
+		)
+		inv.append("items", {"item_code": self.item_code, "qty": qty, "rate": rate})
+		inv.append(
+			"taxes",
+			{
+				"charge_type": "On Net Total",
+				"account_head": "Output CGST - KFPL",
+				"gst_tax_type": "cgst",
+				"rate": 0,
+			},
+		)
+		inv.append(
+			"taxes",
+			{
+				"charge_type": "On Net Total",
+				"account_head": "Output SGST - KFPL",
+				"gst_tax_type": "sgst",
+				"rate": 0,
+			},
+		)
+		return inv
 
-    def ensure_customer(self, name, gstin):
-        if frappe.db.exists("Customer", name):
-            return name
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_round_half_qty_rate(self, _rate, _template):
+		item = frappe._dict(qty=180, rate=42.07, item_code=self.item_code)
+		invoice = frappe._dict(
+			company=self.company,
+			name="TEST",
+			billing_address_gstin="06AAICK4821A1ZZ",
+		)
 
-        # use valid demo GSTINs
-        if "Inter" in name:
-            gstin = "27AAEPM0123C1Z5"  # Maharashtra, valid check digit
-        else:
-            gstin = "07AAEPM0123C1Z1"  # Delhi, valid check digit
+		amounts = calculate_item_gst_amounts(item, invoice)
+		line_base = 180 * 42.07
+		expected = round_half(line_base * 9 / 100, 2)
 
-        doc = frappe.get_doc({
-            "doctype": "Customer",
-            "customer_name": name,
-            "customer_type": "Company",
-            "customer_group": "Commercial",
-            "territory": "India",
-            "gstin": gstin,
-        })
-        doc.insert()
-        return doc.name
+		self.assertEqual(amounts["cgst_amount"], expected)
+		self.assertEqual(amounts["sgst_amount"], expected)
 
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_intra_state_cgst_sgst(self, _rate, _template):
+		inv = self._intra_invoice()
+		apply_sales_invoice_gst_override(inv)
 
-    def ensure_item_with_template(self, item_code, template_name, gst_rate):
-        if not frappe.db.exists("Item Tax Template", template_name):
-            tpl = frappe.get_doc({
-                "doctype": "Item Tax Template",
-                "title": template_name,
-                "company": self.company,
-                "gst_rate": gst_rate,
-            })
-            tpl.insert()
-        if frappe.db.exists("Item", item_code):
-            return item_code
-        item = frappe.get_doc({
-            "doctype": "Item",
-            "item_code": item_code,
-            "item_name": item_code,
-            "item_group": "Products",
-            "stock_uom": "Nos",
-        })
-        item.append("taxes", {
-            "item_tax_template": template_name,
-            "valid_from": "2025-01-01",
-        })
-        item.insert()
-        return item.name
+		self.assertEqual(float(inv.items[0].cgst_amount), 90.0)
+		self.assertEqual(float(inv.items[0].sgst_amount), 90.0)
+		self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
+		self.assertEqual(float(inv.grand_total or 0), 1180.0)
 
-    def make_invoice(self, customer, is_return=False):
-        inv = frappe.get_doc({
-            "doctype": "Sales Invoice",
-            "company": self.company,
-            "customer": customer,
-            "is_return": is_return,
-            "posting_date": "2025-12-04",
-        })
-        inv.append("items", {
-            "item_code": self.item_18,
-            "qty": 1,
-            "rate": 1000,
-        })
-        inv.append("taxes", {
-            "charge_type": "On Net Total",
-            "account_head": "Output CGST - K95",
-            "gst_tax_type": "cgst",
-            "rate": 0,
-        })
-        inv.append("taxes", {
-            "charge_type": "On Net Total",
-            "account_head": "Output SGST - K95",
-            "gst_tax_type": "sgst",
-            "rate": 0,
-        })
-        inv.insert()
-        inv.reload()
-        return inv
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_tax_row_item_wise_detail_matches_items(self, _rate, _template):
+		inv = self._intra_invoice()
+		apply_sales_invoice_gst_override(inv)
 
-    def test_intra_state_cgst_sgst(self):
-        inv = self.make_invoice(self.customer_intra)
-        inv.run_method("validate")
-        inv.reload()
+		for tax in inv.taxes:
+			if tax.gst_tax_type not in ("cgst", "sgst"):
+				continue
 
-        cgst = sum(t.tax_amount for t in inv.taxes
-                   if "cgst" in (t.gst_tax_type or t.account_head or "").lower())
-        sgst = sum(t.tax_amount for t in inv.taxes
-                   if "sgst" in (t.gst_tax_type or t.account_head or "").lower())
+			detail = json.loads(tax.item_wise_tax_detail or "{}")
+			item = inv.items[0]
+			rate = float(item.get(f"{tax.gst_tax_type}_rate") or 0)
+			amount = float(item.get(f"{tax.gst_tax_type}_amount") or 0)
 
-        self.assertEqual(cgst, 90.0)
-        self.assertEqual(sgst, 90.0)
-        self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
-        self.assertEqual(float(inv.grand_total or 0), 1180.0)
-        self.assertEqual(inv.rounded_total, 1180)
+			self.assertEqual(detail[item.item_code], [rate, amount])
+			self.assertEqual(rate, 9.0)
+			self.assertNotEqual(rate, 40.0)
 
-    def test_inter_state_igst(self):
-        inv = self.make_invoice(self.customer_intra)
-        inv.customer_gstin = "27AAACT0000A1Z5"
-        inv.save()
-        inv.reload()
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_credit_note_negative_tax(self, _rate, _template):
+		inv = self._intra_invoice(is_return=True, qty=-1, rate=1000)
+		apply_sales_invoice_gst_override(inv)
 
-        inv.run_method("validate")
-        inv.reload()
+		self.assertEqual(float(inv.items[0].cgst_amount), -90.0)
+		self.assertEqual(float(inv.items[0].sgst_amount), -90.0)
+		self.assertEqual(float(inv.total_taxes_and_charges or 0), -180.0)
+		self.assertTrue(bool(getattr(inv.flags, "skip_gst_validations", False)))
 
-        self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
-        self.assertEqual(float(inv.grand_total or 0), 1180.0)
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_inter_state_igst(self, _rate, _template):
+		inv = self._intra_invoice(customer_gstin="27AABCU9603R1Z2")
+		inv.taxes = []
+		inv.append(
+			"taxes",
+			{
+				"charge_type": "On Net Total",
+				"account_head": "Output IGST - KFPL",
+				"gst_tax_type": "igst",
+				"rate": 0,
+			},
+		)
+		apply_sales_invoice_gst_override(inv)
+
+		self.assertEqual(float(inv.items[0].igst_amount), 180.0)
+		self.assertEqual(float(inv.items[0].cgst_amount), 0.0)
+		self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
+
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_sync_tax_row_item_wise_details(self, _rate, _template):
+		inv = self._intra_invoice()
+		apply_sales_invoice_gst_override(inv)
+
+		for tax in inv.taxes:
+			self.assertEqual(tax.dont_recompute_tax, 1)
+			if tax.gst_tax_type in ("cgst", "sgst"):
+				detail = json.loads(tax.item_wise_tax_detail or "{}")
+				self.assertIn(inv.items[0].item_code, detail)
+
+	def test_round_half_negative(self):
+		self.assertEqual(round_half(-1.235, 2), -1.24)
+		self.assertEqual(round_half(1.235, 2), 1.24)

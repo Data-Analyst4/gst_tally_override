@@ -8,7 +8,7 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["erpnext", "india_compliance"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -162,12 +162,13 @@ app_license = "mit"
 
 
 doc_events = {
-    "Sales Invoice": {
-        "before_insert": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
-        "before_save": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
-        "validate": "gst_tally_override.overrides.sales_invoice_tax.on_validate",
-        "before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
-    }
+	"Sales Invoice": {
+		"before_validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
+		"before_insert": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
+		"before_save": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
+		"validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
+		"before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
+	}
 }
 
 # doc_events = {
