@@ -2,7 +2,8 @@ import json
 import types
 
 import frappe
-from frappe.utils import floor
+from frappe.utils import floor, flt
+from india_compliance.gst_india.overrides.transaction import update_taxable_values
 
 GST_OVERRIDE_DOCTYPE = "Sales Invoice"
 GST_TAX_TYPES = ("cgst", "sgst", "igst", "cess")
@@ -326,6 +327,20 @@ def block_tax_recalculation(doc):
 	doc.calculate_taxes_and_totals = types.MethodType(_noop_calculate_taxes_and_totals, doc)
 
 
+def sync_item_taxable_values(doc):
+	"""Set item.taxable_value so e-Invoice AssAmt matches per-line GST amounts."""
+	update_taxable_values(doc)
+
+	for item in doc.items:
+		if flt(item.taxable_value):
+			continue
+
+		item.taxable_value = flt(
+			item.base_net_amount or item.net_amount or flt(item.qty) * flt(item.rate),
+			item.precision("taxable_value"),
+		)
+
+
 def apply_sales_invoice_gst_override(doc):
 	"""Tally-style per-line GST, tax table sync, and totals for SI / credit notes."""
 	if not uses_tally_gst_override(doc) or not doc.items or not doc.taxes:
@@ -351,6 +366,7 @@ def apply_sales_invoice_gst_override(doc):
 	total_igst = sum(float(getattr(i, "igst_amount", 0) or 0) for i in doc.items)
 
 	update_tax_rows_and_totals(doc, total_cgst, total_sgst, total_igst)
+	sync_item_taxable_values(doc)
 	sync_tax_row_item_wise_details(doc)
 	block_tax_recalculation(doc)
 

@@ -43,7 +43,17 @@ class TestGSTOverride(FrappeTestCase):
 				"base_total": qty * rate,
 			}
 		)
-		inv.append("items", {"item_code": self.item_code, "qty": qty, "rate": rate})
+		line_amount = qty * rate
+		inv.append(
+			"items",
+			{
+				"item_code": self.item_code,
+				"qty": qty,
+				"rate": rate,
+				"net_amount": line_amount,
+				"base_net_amount": line_amount,
+			},
+		)
 		inv.append(
 			"taxes",
 			{
@@ -89,8 +99,24 @@ class TestGSTOverride(FrappeTestCase):
 
 		self.assertEqual(float(inv.items[0].cgst_amount), 90.0)
 		self.assertEqual(float(inv.items[0].sgst_amount), 90.0)
+		self.assertEqual(float(inv.items[0].taxable_value), 1000.0)
 		self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
 		self.assertEqual(float(inv.grand_total or 0), 1180.0)
+
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_taxable_value_matches_e_invoice_tax_formula(self, _rate, _template):
+		inv = self._intra_invoice(qty=180, rate=42.07)
+		apply_sales_invoice_gst_override(inv)
+
+		item = inv.items[0]
+		taxable_value = float(item.taxable_value)
+		gst_rate = float(item.cgst_rate) + float(item.sgst_rate)
+		expected_cgst = round(taxable_value * (gst_rate / 2) / 100, 2)
+
+		self.assertEqual(taxable_value, 180 * 42.07)
+		self.assertEqual(float(item.cgst_amount), expected_cgst)
+		self.assertEqual(float(item.sgst_amount), expected_cgst)
 
 	@GST_PATCHES["get_item_tax_template_name"]
 	@GST_PATCHES["get_gst_rate_from_template"]
