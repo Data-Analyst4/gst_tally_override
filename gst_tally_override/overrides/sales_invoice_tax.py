@@ -415,15 +415,23 @@ def validate_einvoice_invariants(doc, throw=True):
 	return errors
 
 
-def _sales_invoice_repair_updates(doc):
-	"""Parent SI fields to persist after repair (only if they exist in meta)."""
-	updates = {}
-	meta = frappe.get_meta(doc.doctype)
+def _field_persistable(doctype, fieldname):
+	"""Field must exist in DocType meta and as a DB column (migrate may lag meta)."""
+	meta = frappe.get_meta(doctype)
+	if not meta.has_field(fieldname):
+		return False
 
-	if meta.has_field("einvoice_status"):
+	return frappe.db.has_column(doctype, fieldname)
+
+
+def _sales_invoice_repair_updates(doc):
+	"""Parent SI fields to persist after repair."""
+	updates = {}
+
+	if _field_persistable(doc.doctype, "einvoice_status"):
 		updates["einvoice_status"] = "Pending"
 
-	if meta.has_field("gst_breakup_table"):
+	if _field_persistable(doc.doctype, "gst_breakup_table"):
 		set_gst_breakup(doc)
 		updates["gst_breakup_table"] = doc.gst_breakup_table
 
@@ -433,8 +441,8 @@ def _sales_invoice_repair_updates(doc):
 def repair_doc_taxable_values(doc, persist=False):
 	"""Reset taxable_value from base_net_amount; refresh GST breakup on parent."""
 	changes = []
-	item_meta = frappe.get_meta("Sales Invoice Item")
-	tax_meta = frappe.get_meta("Sales Taxes and Charges")
+	item_doctype = "Sales Invoice Item"
+	tax_doctype = "Sales Taxes and Charges"
 
 	for item in doc.items:
 		correct = get_line_taxable_base(item)
@@ -453,7 +461,7 @@ def repair_doc_taxable_values(doc, persist=False):
 		)
 		item.taxable_value = correct
 
-		if persist and item_meta.has_field("taxable_value"):
+		if persist and _field_persistable(item_doctype, "taxable_value"):
 			frappe.db.set_value(
 				"Sales Invoice Item", item.name, "taxable_value", correct, update_modified=False
 			)
@@ -476,9 +484,9 @@ def repair_doc_taxable_values(doc, persist=False):
 
 		for tax in doc.taxes:
 			tax_updates = {}
-			if tax.gst_tax_type and tax_meta.has_field("gst_tax_type"):
+			if tax.gst_tax_type and _field_persistable(tax_doctype, "gst_tax_type"):
 				tax_updates["gst_tax_type"] = tax.gst_tax_type
-			if tax.item_wise_tax_detail and tax_meta.has_field("item_wise_tax_detail"):
+			if tax.item_wise_tax_detail and _field_persistable(tax_doctype, "item_wise_tax_detail"):
 				tax_updates["item_wise_tax_detail"] = tax.item_wise_tax_detail
 
 			if tax_updates:
