@@ -7,8 +7,10 @@ from frappe.tests.utils import FrappeTestCase
 from gst_tally_override.overrides.sales_invoice_tax import (
 	apply_sales_invoice_gst_override,
 	calculate_item_gst_amounts,
+	has_inflated_taxable_value,
 	round_half,
 	sync_tax_row_item_wise_details,
+	validate_einvoice_invariants,
 )
 
 GST_PATCHES = {
@@ -167,6 +169,56 @@ class TestGSTOverride(FrappeTestCase):
 		self.assertEqual(float(inv.items[0].igst_amount), 180.0)
 		self.assertEqual(float(inv.items[0].cgst_amount), 0.0)
 		self.assertEqual(float(inv.total_taxes_and_charges or 0), 180.0)
+
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_inter_state_igst_without_gst_tax_type_on_row(self, _rate, _template):
+		"""Production invoices often have no gst_tax_type until IC runs."""
+		inv = self._intra_invoice(customer_gstin="27AABCU9603R1Z2")
+		inv.taxes = []
+		inv.append(
+			"taxes",
+			{
+				"charge_type": "On Net Total",
+				"account_head": "Output IGST - KFPL",
+				"rate": 0,
+			},
+		)
+		apply_sales_invoice_gst_override(inv)
+
+		self.assertEqual(float(inv.items[0].taxable_value), 1000.0)
+		self.assertEqual(float(inv.items[0].igst_amount), 180.0)
+		self.assertFalse(has_inflated_taxable_value(inv))
+		validate_einvoice_invariants(inv)
+
+	@GST_PATCHES["get_item_tax_template_name"]
+	@GST_PATCHES["get_gst_rate_from_template"]
+	def test_multi_line_taxable_sum_matches_net(self, _rate, _template):
+		inv = self._intra_invoice(customer_gstin="27AABCU9603R1Z2")
+		inv.taxes = []
+		inv.append(
+			"taxes",
+			{
+				"charge_type": "On Net Total",
+				"account_head": "Output IGST - KFPL",
+				"rate": 0,
+			},
+		)
+		inv.append(
+			"items",
+			{
+				"item_code": self.item_code,
+				"qty": 2,
+				"rate": 500,
+				"net_amount": 1000,
+				"base_net_amount": 1000,
+			},
+		)
+		apply_sales_invoice_gst_override(inv)
+
+		net = sum(float(i.base_net_amount) for i in inv.items)
+		taxable = sum(float(i.taxable_value) for i in inv.items)
+		self.assertEqual(taxable, net)
 
 	@GST_PATCHES["get_item_tax_template_name"]
 	@GST_PATCHES["get_gst_rate_from_template"]

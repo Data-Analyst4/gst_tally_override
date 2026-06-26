@@ -163,9 +163,6 @@ required_apps = ["erpnext", "india_compliance"]
 
 doc_events = {
 	"Sales Invoice": {
-		"before_validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
-		"before_insert": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
-		"before_save": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
 		"validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
 		"before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
 	}

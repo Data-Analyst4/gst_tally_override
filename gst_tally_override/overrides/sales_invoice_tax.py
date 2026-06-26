@@ -2,11 +2,16 @@ import json
 import types
 
 import frappe
+from frappe import _
 from frappe.utils import floor, flt
-from india_compliance.gst_india.overrides.transaction import update_taxable_values
+from india_compliance.gst_india.overrides.transaction import (
+	set_gst_breakup,
+	set_gst_tax_type,
+)
 
 GST_OVERRIDE_DOCTYPE = "Sales Invoice"
 GST_TAX_TYPES = ("cgst", "sgst", "igst", "cess")
+EINVOICE_TOLERANCE = 0.02
 
 
 def uses_tally_gst_override(doc):
@@ -241,11 +246,32 @@ def set_item_gst_rates(item, invoice_doc):
 		item.sgst_rate = half
 
 
+def resolve_gst_type(tax):
+	gst_type = (tax.gst_tax_type or "").lower()
+	if gst_type in GST_TAX_TYPES:
+		return gst_type
+
+	head = (tax.account_head or "").lower()
+	for tax_type in GST_TAX_TYPES:
+		if tax_type in head:
+			return tax_type
+
+	return None
+
+
+def stamp_gst_metadata(doc):
+	"""Map tax account_head → gst_tax_type without running full IC validation."""
+	prev_skip = bool(getattr(doc.flags, "skip_gst_validations", False))
+	doc.flags.skip_gst_validations = False
+	set_gst_tax_type(doc)
+	doc.flags.skip_gst_validations = prev_skip
+
+
 def sync_tax_row_item_wise_details(doc):
 	"""Keep taxes[].item_wise_tax_detail aligned with per-line GST fields."""
 	for tax in doc.taxes:
-		gst_type = (tax.gst_tax_type or "").lower()
-		if gst_type not in GST_TAX_TYPES:
+		gst_type = resolve_gst_type(tax)
+		if not gst_type:
 			continue
 
 		detail = {}
@@ -257,6 +283,8 @@ def sync_tax_row_item_wise_details(doc):
 
 		tax.item_wise_tax_detail = json.dumps(detail)
 		tax.dont_recompute_tax = 1
+		if not tax.gst_tax_type:
+			tax.gst_tax_type = gst_type
 
 
 def update_tax_rows_and_totals(doc, total_cgst, total_sgst, total_igst):
@@ -327,18 +355,131 @@ def block_tax_recalculation(doc):
 	doc.calculate_taxes_and_totals = types.MethodType(_noop_calculate_taxes_and_totals, doc)
 
 
-def sync_item_taxable_values(doc):
-	"""Set item.taxable_value so e-Invoice AssAmt matches per-line GST amounts."""
-	update_taxable_values(doc)
+def get_line_taxable_base(item):
+	return flt(
+		item.base_net_amount or item.net_amount or flt(item.qty) * flt(item.rate),
+		item.precision("taxable_value"),
+	)
 
+
+def sync_item_taxable_values(doc):
+	"""Assessable value before GST — must not include tax amounts."""
 	for item in doc.items:
-		if flt(item.taxable_value):
+		item.taxable_value = get_line_taxable_base(item)
+
+
+def has_inflated_taxable_value(doc):
+	"""True when taxable totals include GST (net + tax pattern)."""
+	net = sum(flt(i.base_net_amount) for i in doc.items)
+	taxable = sum(flt(i.taxable_value) for i in doc.items)
+	tax = sum(
+		flt(i.igst_amount) + flt(i.cgst_amount) + flt(i.sgst_amount) for i in doc.items
+	)
+	if not net:
+		return False
+
+	return abs(taxable - net - tax) < 1 and taxable > net + EINVOICE_TOLERANCE
+
+
+def validate_einvoice_invariants(doc, throw=True):
+	errors = []
+
+	for idx, item in enumerate(doc.items, 1):
+		if item.gst_treatment not in ("Taxable", "Zero-Rated"):
 			continue
 
-		item.taxable_value = flt(
-			item.base_net_amount or item.net_amount or flt(item.qty) * flt(item.rate),
-			item.precision("taxable_value"),
+		taxable_value = flt(item.taxable_value)
+		for tax_type in ("igst", "cgst", "sgst"):
+			rate = flt(getattr(item, f"{tax_type}_rate", 0))
+			amount = flt(getattr(item, f"{tax_type}_amount", 0))
+			if not rate and not amount:
+				continue
+
+			expected = round_half(taxable_value * rate / 100, 2)
+			if abs(amount - expected) > EINVOICE_TOLERANCE:
+				errors.append(
+					_("Row {0} ({1}): {2} amount {3} does not match taxable {4} at {5}% (expected {6})").format(
+						idx,
+						item.item_code,
+						tax_type.upper(),
+						amount,
+						taxable_value,
+						rate,
+						expected,
+					)
+				)
+
+	if errors and throw:
+		frappe.throw("<br>".join(errors), title=_("e-Invoice GST Mismatch"))
+
+	return errors
+
+
+def repair_doc_taxable_values(doc, persist=False):
+	"""Reset taxable_value from base_net_amount; refresh GST breakup on parent."""
+	changes = []
+
+	for item in doc.items:
+		correct = get_line_taxable_base(item)
+		current = flt(item.taxable_value)
+
+		if abs(current - correct) <= EINVOICE_TOLERANCE:
+			continue
+
+		changes.append(
+			{
+				"item": item.item_code,
+				"row": item.idx,
+				"from": current,
+				"to": correct,
+			}
 		)
+		item.taxable_value = correct
+
+		if persist:
+			frappe.db.set_value(
+				"Sales Invoice Item", item.name, "taxable_value", correct, update_modified=False
+			)
+
+	if not changes:
+		return changes
+
+	stamp_gst_metadata(doc)
+	sync_tax_row_item_wise_details(doc)
+	set_gst_breakup(doc)
+
+	if persist:
+		frappe.db.set_value(
+			"Sales Invoice",
+			doc.name,
+			{
+				"gst_breakup_table": doc.gst_breakup_table,
+				"einvoice_status": "Pending",
+			},
+			update_modified=True,
+		)
+
+		for tax in doc.taxes:
+			if tax.gst_tax_type:
+				frappe.db.set_value(
+					"Sales Taxes and Charges",
+					tax.name,
+					"gst_tax_type",
+					tax.gst_tax_type,
+					update_modified=False,
+				)
+			if tax.item_wise_tax_detail:
+				frappe.db.set_value(
+					"Sales Taxes and Charges",
+					tax.name,
+					"item_wise_tax_detail",
+					tax.item_wise_tax_detail,
+					update_modified=False,
+				)
+
+		frappe.db.commit()
+
+	return changes
 
 
 def apply_sales_invoice_gst_override(doc):
@@ -365,9 +506,11 @@ def apply_sales_invoice_gst_override(doc):
 	total_sgst = sum(float(getattr(i, "sgst_amount", 0) or 0) for i in doc.items)
 	total_igst = sum(float(getattr(i, "igst_amount", 0) or 0) for i in doc.items)
 
+	stamp_gst_metadata(doc)
 	update_tax_rows_and_totals(doc, total_cgst, total_sgst, total_igst)
 	sync_item_taxable_values(doc)
 	sync_tax_row_item_wise_details(doc)
+	validate_einvoice_invariants(doc, throw=bool(getattr(doc.flags, "_gst_override_validate", False)))
 	block_tax_recalculation(doc)
 
 	frappe.logger().debug(
@@ -384,4 +527,5 @@ on_validate = on_before_validate
 
 
 def on_before_submit(doc, method=None):
+	doc.flags._gst_override_validate = True
 	apply_sales_invoice_gst_override(doc)
