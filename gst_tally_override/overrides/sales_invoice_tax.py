@@ -415,9 +415,26 @@ def validate_einvoice_invariants(doc, throw=True):
 	return errors
 
 
+def _sales_invoice_repair_updates(doc):
+	"""Parent SI fields to persist after repair (only if they exist in meta)."""
+	updates = {}
+	meta = frappe.get_meta(doc.doctype)
+
+	if meta.has_field("einvoice_status"):
+		updates["einvoice_status"] = "Pending"
+
+	if meta.has_field("gst_breakup_table"):
+		set_gst_breakup(doc)
+		updates["gst_breakup_table"] = doc.gst_breakup_table
+
+	return updates
+
+
 def repair_doc_taxable_values(doc, persist=False):
 	"""Reset taxable_value from base_net_amount; refresh GST breakup on parent."""
 	changes = []
+	item_meta = frappe.get_meta("Sales Invoice Item")
+	tax_meta = frappe.get_meta("Sales Taxes and Charges")
 
 	for item in doc.items:
 		correct = get_line_taxable_base(item)
@@ -436,7 +453,7 @@ def repair_doc_taxable_values(doc, persist=False):
 		)
 		item.taxable_value = correct
 
-		if persist:
+		if persist and item_meta.has_field("taxable_value"):
 			frappe.db.set_value(
 				"Sales Invoice Item", item.name, "taxable_value", correct, update_modified=False
 			)
@@ -446,38 +463,35 @@ def repair_doc_taxable_values(doc, persist=False):
 
 	stamp_gst_metadata(doc)
 	sync_tax_row_item_wise_details(doc)
-	set_gst_breakup(doc)
 
 	if persist:
-		frappe.db.set_value(
-			"Sales Invoice",
-			doc.name,
-			{
-				"gst_breakup_table": doc.gst_breakup_table,
-				"einvoice_status": "Pending",
-			},
-			update_modified=True,
-		)
+		invoice_updates = _sales_invoice_repair_updates(doc)
+		if invoice_updates:
+			frappe.db.set_value(
+				"Sales Invoice",
+				doc.name,
+				invoice_updates,
+				update_modified=True,
+			)
 
 		for tax in doc.taxes:
-			if tax.gst_tax_type:
+			tax_updates = {}
+			if tax.gst_tax_type and tax_meta.has_field("gst_tax_type"):
+				tax_updates["gst_tax_type"] = tax.gst_tax_type
+			if tax.item_wise_tax_detail and tax_meta.has_field("item_wise_tax_detail"):
+				tax_updates["item_wise_tax_detail"] = tax.item_wise_tax_detail
+
+			if tax_updates:
 				frappe.db.set_value(
 					"Sales Taxes and Charges",
 					tax.name,
-					"gst_tax_type",
-					tax.gst_tax_type,
-					update_modified=False,
-				)
-			if tax.item_wise_tax_detail:
-				frappe.db.set_value(
-					"Sales Taxes and Charges",
-					tax.name,
-					"item_wise_tax_detail",
-					tax.item_wise_tax_detail,
+					tax_updates,
 					update_modified=False,
 				)
 
 		frappe.db.commit()
+	else:
+		set_gst_breakup(doc)
 
 	return changes
 
