@@ -22,18 +22,35 @@ def should_skip_ic_gst(doc):
 	return uses_tally_gst_override(doc) and bool(getattr(doc.flags, "skip_gst_validations", False))
 
 
+def ensure_tally_gst_applied(doc):
+	"""
+	Apply Tally GST and set skip_gst_validations before India Compliance runs.
+
+	IC hooks are registered earlier in apps.txt, so IC validate/before_save can
+	run before our doc_events unless we also apply from inside the patches.
+	"""
+	if not uses_tally_gst_override(doc):
+		return False
+
+	if not getattr(doc.flags, "skip_gst_validations", False):
+		# Late import: apply_sales_invoice_gst_override is defined below in this module
+		apply_sales_invoice_gst_override(doc)
+
+	return should_skip_ic_gst(doc)
+
+
 def _patch_india_compliance():
 	"""Monkey-patch India Compliance so Tally override can run on Sales Invoice."""
 	try:
 		import india_compliance.gst_india.overrides.sales_invoice as ic_si
 		import india_compliance.gst_india.overrides.transaction as ic_txn
 
-		if not getattr(ic_txn, "_gst_tally_override_patched", False):
+		if not getattr(ic_txn, "_gst_tally_override_patched_v2", False):
 			if hasattr(ic_txn, "validate_item_wise_tax_detail"):
 				_orig_item_validate = ic_txn.validate_item_wise_tax_detail
 
 				def patched_validate_item_wise_tax_detail(doc):
-					if should_skip_ic_gst(doc):
+					if ensure_tally_gst_applied(doc):
 						return
 					return _orig_item_validate(doc)
 
@@ -43,7 +60,7 @@ def _patch_india_compliance():
 				_orig_txn_validate = ic_txn.validate_transaction
 
 				def patched_validate_transaction(doc, method=None):
-					if should_skip_ic_gst(doc):
+					if ensure_tally_gst_applied(doc):
 						return False
 					return _orig_txn_validate(doc, method)
 
@@ -53,7 +70,7 @@ def _patch_india_compliance():
 				_orig_set_breakup = ic_txn.set_item_wise_tax_breakup
 
 				def patched_set_item_wise_tax_breakup(doc, *args, **kwargs):
-					if should_skip_ic_gst(doc):
+					if ensure_tally_gst_applied(doc):
 						return
 					return _orig_set_breakup(doc, *args, **kwargs)
 
@@ -64,12 +81,12 @@ def _patch_india_compliance():
 
 				class PatchedItemGSTDetails(_OrigItemGSTDetails):
 					def update(self, doc):
-						if should_skip_ic_gst(doc):
+						if ensure_tally_gst_applied(doc):
 							return
 						return super().update(doc)
 
 					def validate_item_gst_details(self):
-						if should_skip_ic_gst(self.doc):
+						if ensure_tally_gst_applied(self.doc):
 							return
 						return super().validate_item_gst_details()
 
@@ -79,26 +96,37 @@ def _patch_india_compliance():
 				_orig_update_gst_details = ic_txn.update_gst_details
 
 				def patched_update_gst_details(doc, method=None):
-					if should_skip_ic_gst(doc):
+					if ensure_tally_gst_applied(doc):
 						return
 					return _orig_update_gst_details(doc, method)
 
 				ic_txn.update_gst_details = patched_update_gst_details
 
-			ic_txn._gst_tally_override_patched = True
+			# Newer india_compliance renames / adds this; traceback from credit notes hits it
+			if hasattr(ic_txn, "update_item_gst_details"):
+				_orig_update_item_gst_details = ic_txn.update_item_gst_details
+
+				def patched_update_item_gst_details(doc, method=None):
+					if ensure_tally_gst_applied(doc):
+						return
+					return _orig_update_item_gst_details(doc, method)
+
+				ic_txn.update_item_gst_details = patched_update_item_gst_details
+
+			ic_txn._gst_tally_override_patched_v2 = True
 
 		if hasattr(ic_si, "validate_transaction") and not getattr(
-			ic_si, "_gst_tally_override_patched", False
+			ic_si, "_gst_tally_override_patched_v2", False
 		):
 			_orig_si_validate_transaction = ic_si.validate_transaction
 
 			def patched_si_validate_transaction(doc, method=None):
-				if should_skip_ic_gst(doc):
+				if ensure_tally_gst_applied(doc):
 					return False
 				return _orig_si_validate_transaction(doc, method)
 
 			ic_si.validate_transaction = patched_si_validate_transaction
-			ic_si._gst_tally_override_patched = True
+			ic_si._gst_tally_override_patched_v2 = True
 
 	except Exception:
 		frappe.log_error(title="gst_tally_override: India Compliance patch failed")

@@ -163,7 +163,9 @@ required_apps = ["erpnext", "india_compliance"]
 
 doc_events = {
 	"Sales Invoice": {
-		"validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
+		# Must run before india_compliance validate so skip_gst_validations is set
+		# (IC is earlier in apps.txt; same-event hooks would still lose the race).
+		"before_validate": "gst_tally_override.overrides.sales_invoice_tax.on_before_validate",
 		"before_submit": "gst_tally_override.overrides.sales_invoice_tax.on_before_submit",
 	}
 }
